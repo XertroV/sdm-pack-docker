@@ -44,13 +44,10 @@ import * as os from "os";
 import * as path from "path";
 import { cleanImageName } from "../support/name";
 import {
-    DockerRegistryProvider,
-    Password,
-} from "../typings/types";
-import {
     DockerOptions,
     DockerRegistry,
 } from "./DockerBuild";
+import { Password, DockerRegistryProvider } from "../typings/types";
 
 export type DockerImageNameCreator = (p: GitProject,
                                       sdmGoal: SdmGoalEvent,
