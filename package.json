@@ -36,10 +36,6 @@
     "vscode-languageserver-types": "^3.14.0"
   },
   "peerDependencies": {
-    "@atomist/automation-client": "^1.9.0",
-    "@atomist/sdm": "^1.9.0",
-    "@atomist/sdm-core": "^1.9.0",
-    "@atomist/sdm-pack-fingerprint": "^4.0.4"
   },
   "devDependencies": {
     "@atomist/automation-client": "^1.9.0",
