@@ -24,27 +24,36 @@ import {
     GoalDefinition,
     ImplementationRegistration,
     IndependentOfEnvironment, LoggingProgressLog,
-    mergeOptions, ProjectAwareGoalInvocation, spawnLog,
+    mergeOptions, ProjectAwareGoalInvocation, SdmGoalEvent, spawnLog,
 } from "@atomist/sdm";
-import {postLinkImageWebhook, toArray} from "@atomist/sdm-core";
+import {postLinkImageWebhook} from "@atomist/sdm-core";
 import {
     DefaultDockerImageNameCreator,
-    DockerImageNameCreator,
-    DockerOptions,
-    DockerProgressReporter,
-    DockerRegistry, executeDockerBuild,
-} from "@atomist/sdm-pack-docker";
+    DockerImageNameCreator, executeDockerBuild,
+} from "./executeDockerBuild";
+
+import { toArray } from "lodash";
+import * as os from "os";
+import * as path from "path";
+import { DockerRegistryProvider, Password } from "../typings/types";
+import { DockerOptions, DockerRegistry } from "./DockerBuild";
+import {DockerProgressReporter} from "./DockerProgressReporter";
+
+interface DockerOptionsPlus extends DockerOptions {
+    programArgs?: string[];
+}
 
 /**
  * Options to configure the Docker image build
  */
 
-const DefaultDockerOptions: DockerOptions = {
+const DefaultDockerOptionsPlus: DockerOptionsPlus = {
     dockerImageNameCreator: DefaultDockerImageNameCreator,
     dockerfileFinder: async () => "Dockerfile",
     builder: "docker",
     builderArgs: [],
-    builderPath: ".",
+    builderPath: "hello-world",
+    programArgs: [],
 };
 
 async function checkIsBuilderAvailable(cmd: string, ...args: string[]): Promise<void> {
@@ -90,11 +99,11 @@ async function readRegistries(ctx: HandlerContext): Promise<DockerRegistry[]> {
     return registries;
 }
 
-export function doDockerRun(options: DockerOptions): ExecuteGoal {
+export function doDockerRun(options: DockerOptionsPlus): ExecuteGoal {
     return doWithProject(async gi => {
             const { goalEvent, context, project } = gi;
 
-            const optsToUse = mergeOptions<DockerOptions>(options, {}, "docker.build");
+            const optsToUse = mergeOptions<DockerOptionsPlus>(options, {}, "docker.build");
 
             switch (optsToUse.builder) {
                 case "docker":
@@ -110,20 +119,27 @@ export function doDockerRun(options: DockerOptions): ExecuteGoal {
                 optsToUse.registry = await readRegistries(context);
             }
 
-            const imageNames = await optsToUse.dockerImageNameCreator?.(project, goalEvent, optsToUse, context);
-            const images = _.flatten(
-                imageNames.map(imageName =>
-                    imageName.tags.map(tag => `${imageName.registry ? `${imageName.registry}/` : ""}${imageName.name}:${tag}`)));
-            const dockerfilePath = await (optsToUse.dockerfileFinder ? optsToUse.dockerfileFinder(project) : "Dockerfile");
+            // const imageNames = await optsToUse.dockerImageNameCreator?.(project, goalEvent, optsToUse, context);
+            // const images = _.flatten(
+            //     imageNames.map(imageName =>
+            //         imageName.tags.map(tag => `${imageName.registry ? `${imageName.registry}/` : ""}${imageName.name}:${tag}`)));
+            // const dockerfilePath = await (optsToUse.dockerfileFinder ? optsToUse.dockerfileFinder(project) : "Dockerfile");
 
-            const externalUrls: ExecuteGoalResult["externalUrls"] = [];
+            // if (images.length === 0) {
+            //     return { code: 1, message: "No docker images to process" }
+            // }
+
+            // const externalUrls: ExecuteGoalResult["externalUrls"] = [];
             // if (await pushEnabled(gi, optsToUse)) {
             //     externalUrls = getExternalUrls(imageNames, optsToUse);
             // }
 
             // 1. run docker login
             // let result: ExecuteGoalResult = await dockerLogin(optsToUse, gi);
-            let result = {code: 0} as ExecuteGoalResult;
+            let result: ExecuteGoalResult = {code: 0};
+
+            const images: string[] = [];
+            const dockerfilePath = "";
 
             if (result.code !== 0) {
                 return result;
@@ -131,7 +147,7 @@ export function doDockerRun(options: DockerOptions): ExecuteGoal {
 
             if (optsToUse.builder === "docker") {
 
-                result = await runWithDocker(images, dockerfilePath, gi, optsToUse);
+                result = await runWithDocker(gi, optsToUse);
 
                 if (result.code !== 0) {
                     return result;
@@ -139,7 +155,7 @@ export function doDockerRun(options: DockerOptions): ExecuteGoal {
 
             } else if (optsToUse.builder === "kaniko") {
 
-                result = await runWithKaniko(images, imageNames || [], dockerfilePath, gi, optsToUse);
+                result = await runWithKaniko(images, /*imageNames ||*/ [], dockerfilePath, gi, optsToUse);
 
                 if (result.code !== 0) {
                     return result;
@@ -155,7 +171,7 @@ export function doDockerRun(options: DockerOptions): ExecuteGoal {
                 context.workspaceId)) {
                 return {
                     ...result,
-                    externalUrls,
+                    // externalUrls,
                 };
             } else {
                 return { code: 1, message: "Image link failed" };
@@ -171,7 +187,7 @@ export function doDockerRun(options: DockerOptions): ExecuteGoal {
 /**
  * Goal that performs docker build and push depending on the provided options
  */
-export class DockerExec extends FulfillableGoalWithRegistrations<DockerOptions> {
+export class DockerExec extends FulfillableGoalWithRegistrations<DockerOptionsPlus> {
 
     constructor(private readonly goalDetailsOrUniqueName: FulfillableGoalDetails | string = DefaultGoalNameGenerator.generateName("docker-runner"),
                 ...dependsOn: Goal[]) {
@@ -183,8 +199,8 @@ export class DockerExec extends FulfillableGoalWithRegistrations<DockerOptions> 
             , ...dependsOn);
     }
 
-    public with(registration: DockerOptions): this {
-        const optsToUse = mergeOptions<DockerOptions>(DefaultDockerOptions, registration);
+    public with(registration: DockerOptionsPlus): this {
+        const optsToUse = mergeOptions<DockerOptionsPlus>(DefaultDockerOptionsPlus, registration);
 
         this.addFulfillment({
             goalExecutor: doDockerRun(optsToUse),
@@ -197,26 +213,29 @@ export class DockerExec extends FulfillableGoalWithRegistrations<DockerOptions> 
 }
 
 const DockerBuildDefinition: GoalDefinition = {
-    uniqueName: "docker-exec",
-    displayName: "docker exec",
+    uniqueName: "docker-run",
+    displayName: "docker run",
     environment: IndependentOfEnvironment,
-    workingDescription: "Running docker exec",
-    completedDescription: "Docker exec successful",
-    failedDescription: "Docker exec failed",
+    workingDescription: "Running docker container",
+    completedDescription: "Docker run successful",
+    failedDescription: "Docker run failed",
     isolated: true,
     retryFeasible: true,
 };
 
-async function runWithDocker(images: string[],
-                             dockerfilePath: string,
-                             gi: ProjectAwareGoalInvocation,
-                             optsToUse: DockerOptions): Promise<ExecuteGoalResult> {
-    // 2. run docker build
-    const tags = _.flatten(images.map(i => ["-t", i]));
+function dockerConfigPath(options: DockerOptionsPlus, goalEvent: SdmGoalEvent): string {
+    if (toArray(options.registry || []).some((r: DockerRegistry) => !!r.user && !!r.password)) {
+        return path.join(os.homedir(), ".docker");
+    } else if (!!options.config) {
+        return path.join(os.homedir(), `.docker-${goalEvent.goalSetId}`);
+    }
+}
 
+async function runWithDocker(gi: ProjectAwareGoalInvocation,
+                             optsToUse: DockerOptionsPlus): Promise<ExecuteGoalResult> {
     const result: ExecuteGoalResult = await gi.spawn(
         "docker",
-        ["run"],
+        ["run", ...optsToUse.builderArgs, optsToUse.builderPath, ...optsToUse.programArgs],
         // ["run", "-f", , ...tags, ...optsToUse.builderArgs, optsToUse.builderPath],
         {
             env: {
@@ -238,7 +257,7 @@ async function runWithKaniko(images: string[],
                              imageNames: Array<{ registry: string, name: string, tags: string[] }>,
                              dockerfilePath: string,
                              gi: ProjectAwareGoalInvocation,
-                             optsToUse: DockerOptions): Promise<ExecuteGoalResult> {
+                             optsToUse: DockerOptionsPlus): Promise<ExecuteGoalResult> {
     throw Error("runWithKaniko unimplemented.");
     return { code: 99 };
 }

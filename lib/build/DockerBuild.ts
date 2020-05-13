@@ -25,6 +25,7 @@ import {
     ImplementationRegistration,
     IndependentOfEnvironment,
     mergeOptions,
+    SdmGoalEvent,
 } from "@atomist/sdm";
 import { DockerProgressReporter } from "./DockerProgressReporter";
 import {
